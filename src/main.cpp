@@ -1,5 +1,6 @@
 #include <cpuid.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
@@ -10,12 +11,9 @@
 #include <random>
 #include <vector>
 
-#include "timer.h"
-
 size_t max_size = 1 << 25;
 int alignment = 1 << 12;  // 4k
 char* memory = (char*)aligned_alloc(alignment, max_size);
-
 void reset_cache() {
     static volatile char* buffer = (char*)aligned_alloc(alignment, max_size);
     for (int i = 0; i < max_size; i += 16)
@@ -46,23 +44,16 @@ std::vector<size_t> create_pos(size_t start, size_t count, size_t stride) {
     return pos;
 }
 
-double measure(char* array, int bench_cnt, int accesses_cnt) {
-    timer timer;
-
-    // double time = 0;
-    for (int bench = 0; bench < bench_cnt; bench++) {
-        // reset_cache();
-        timer.restart();
-        // auto start = std::chrono::high_resolution_clock::now();
-        for (int i = 0; i < accesses_cnt; i++) {
-            make_accesses(array);
-        }
-        // auto end = std::chrono::high_resolution_clock::now();
-        // time += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-        timer.nextLap();
+int measure(char* array, int accesses_cnt) {
+        make_accesses(array);
+    
+    auto start = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < accesses_cnt; i++) {
+        make_accesses(array);
     }
-    return timer.lapAvg();
-    // return time / bench_cnt;
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::microseconds ms_double = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    return ms_double.count();
 }
 
 void print_cpu_version() {
@@ -88,26 +79,37 @@ void print_cpu_version() {
     std::cout << "CPU Version: " << CPUBrandString << std::endl;
 }
 
-double measure_size(int cur_size) {
-    auto pos = create_pos(0, cur_size / 16, 16);
-    create_accesses_array(memory, pos);
-    return measure(memory, 10, 10000);
+int measure_size(int cur_size) {
+    int sum = 0;
+    for (int bench = 0; bench < 5; bench++) {
+        auto pos = create_pos(0, cur_size / 16, 16);
+        create_accesses_array(memory, pos);
+        sum += measure(memory, 10000);
+    }
+    return sum;
 }
 
-double measure_assoc(int cache_size, int cur_assoc) {
-    auto pos = create_pos(0, cur_assoc, cache_size);
-    create_accesses_array(memory, pos);
-    return measure(memory, 10, 10000000);
+int measure_assoc(int cache_size, int cur_assoc) {
+    int sum = 0;
+    for (int bench = 0; bench < 25; bench++) {
+        auto pos = create_pos(0, cur_assoc, cache_size);
+        create_accesses_array(memory, pos);
+        sum += measure(memory, 1000000);
+    }
+    return sum;
 }
 
-double measure_block(int cache_size, int assoc, int cur_size) {
-    int way_size = cache_size / assoc;
-
-    auto pos1 = create_pos(0, assoc/2, way_size);
-    auto pos2 = create_pos(way_size*(assoc/2) + cur_size, assoc/2 + 1, way_size);
-    pos1.insert(pos1.end(), pos2.begin(), pos2.end());
-    create_accesses_array(memory, pos1);
-    return measure(memory, 50, 1000000);
+int measure_block(int cache_size, int assoc, int cur_size) {
+    int sum = 0;
+    for (int bench = 0; bench < 100; bench++) {
+        int way_size = cache_size / assoc;
+        auto pos1 = create_pos(0, assoc / 2, way_size);
+        auto pos2 = create_pos(way_size * (assoc / 2) + cur_size, assoc / 2 + 1, way_size);
+        pos1.insert(pos1.end(), pos2.begin(), pos2.end());
+        create_accesses_array(memory, pos1);
+        sum += measure(memory, 1000000);
+    }
+    return sum;
 }
 
 // double measure_ws_and_assoc() {
@@ -117,75 +119,102 @@ double measure_block(int cache_size, int assoc, int cur_size) {
 //     return measure(memory);
 // }
 
-int main() {
-    double prev_time = 0, prev_delta = 0;
-    std::ofstream fout("measure_assoc");
-
-    double max_delta = INT32_MIN;
-    // int res_assoc = 0;
-    // for (int cur_assoc = 1; cur_assoc <= 16; cur_assoc++) {
-    //     auto cur_time = measure_assoc(32 * 1024, cur_assoc);
-    //     if (prev_time == 0)
-    //         prev_time = cur_time;
-    //     double delta = cur_time - prev_time;
-    //     if (prev_delta == 0)
-    //         prev_delta = delta;
-    //     if (delta - prev_delta > max_delta) {
-    //         max_delta = delta - prev_delta;
-    //         res_assoc = cur_assoc - 1;
-    //     }
-    //     std::cout << "cur_assoc: " << cur_assoc << ", time: " << (cur_time) << ", delta: " << delta << "\n";
-    //     fout << cur_assoc << ' ' << cur_time << '\n';
-    //     prev_time = cur_time;
-    //     prev_delta = delta;
-    // }
-    // fout.close();
-
-    // max_delta = INT32_MIN;
-    // int res_size = 0;
-    // prev_delta = 0;
-    // prev_time = 0;
-    // fout = std::ofstream("measure_size");
-    // for (int cur_size = 1; cur_size <= 64; cur_size++) {
-    //     auto cur_time = measure_size(cur_size * 1024);
-    //     if (prev_time == 0)
-    //         prev_time = cur_time;
-    //     double delta = cur_time - prev_time;
-    //     if (prev_delta == 0)
-    //         prev_delta = delta;
-    //     if (delta - prev_delta > max_delta) {
-    //         max_delta = delta - prev_delta;
-    //         res_size = cur_size - 1;
-    //     }
-    //     std::cout << "cur_size: " << cur_size << ", time: " << (cur_time) << ", delta: " << delta << "\n";
-    //     fout << cur_size << ' ' << cur_time << '\n';
-    //     prev_time = cur_time;
-    //     prev_delta = delta;
-    // }
-    // fout.close();
-
-    max_delta = INT32_MIN;
-    int res_block = 0;
-    prev_delta = 0;
-    prev_time = 0;
-    fout = std::ofstream("measure_block");
-    for (int cur_block = 16; cur_block <= 128; cur_block+=8) {
-        auto cur_time = measure_block(32 * 1024, 8, cur_block);
-        if (prev_time == 0)
-            prev_time = cur_time;
-        double delta = cur_time - prev_time;
-        if (prev_delta == 0)
-            prev_delta = delta;
-        if (delta - prev_delta > max_delta) {
-            max_delta = delta - prev_delta;
-            res_block = cur_block - 1;
+class JumpDetector {
+   public:
+    JumpDetector(double jump_coef) : jump_coef(jump_coef) {}
+    void add_measure(int measure) {
+        if (prev_measure != 0) {
+            int cur_delta = measure - prev_measure;
+            if (delta_sum != 0) {
+                int mean_delta = delta_sum / measures_count;
+                int diff = std::abs(cur_delta - mean_delta);
+                std::cout << " jump?: " << (double)diff / std::abs(mean_delta) << " mean: " << mean_delta << " cur: " << cur_delta << "\n";
+                if (diff > std::abs(mean_delta) * jump_coef)
+                    is_jump_ = true;
+            }
+            delta_sum += cur_delta;
+            measures_count++;
         }
-        std::cout << "cur_block: " << cur_block << ", time: " << (cur_time) << ", delta: " << delta << "\n";
-        fout << cur_block << ' ' << cur_time << '\n';
+        prev_measure = measure;
+    }
+
+    bool is_jump() const { return is_jump_; }
+
+   private:
+    bool is_jump_ = false;
+    double jump_coef;
+    int measures_count = 0;
+    int delta_sum = 0;
+    int prev_measure = 0;
+};
+
+int assoc() {
+    double prev_time = 0;
+    std::ofstream fout("measure_assoc");
+    int res_assoc = 0;
+    JumpDetector jump_detector(5);
+    for (int cur_assoc = 1; cur_assoc <= 16; cur_assoc++) {
+        auto cur_time = measure_assoc(32 * 1024, cur_assoc);
+        std::cout << "cur_assoc: " << cur_assoc << ", time: " << (cur_time) << ", delta: " << (cur_time - prev_time) << "\n";
+        fout << cur_assoc << ' ' << cur_time << '\n';
+        jump_detector.add_measure(cur_time);
+        if (jump_detector.is_jump()) {
+            res_assoc = cur_assoc - 1;
+            break;
+        }
         prev_time = cur_time;
-        prev_delta = delta;
     }
     fout.close();
+    return res_assoc;
+}
 
-    // std::cout << "Res assoc: " << res_assoc << ", res size: " << res_size;
+int size() {
+    int res_size = 0;
+    double prev_time = 0;
+    std::ofstream fout("measure_size");
+    JumpDetector jump_detector(2);
+    for (int cur_size = 1; cur_size <= 64; cur_size++) {
+        auto cur_time = measure_size(cur_size * 1024);
+        //std::cout << "cur_size: " << cur_size << ", time: " << (cur_time) << ", delta: " << (cur_time - prev_time) << "\n";
+        fout << cur_size << ' ' << cur_time << '\n';
+
+        jump_detector.add_measure(cur_time);
+        if (jump_detector.is_jump()) {
+            res_size = cur_size - 1;
+            break;
+        }
+        prev_time = cur_time;
+    }
+    fout.close();
+    return res_size;
+}
+
+int block() {
+    int res_block = 0;
+    double prev_time = 0;
+    std::ofstream fout("measure_block");
+    JumpDetector jump_detector(10);
+    for (int cur_block = 16; cur_block <= 128; cur_block += 8) {
+        auto cur_time = measure_block(32 * 1024, 8, cur_block);
+        std::cout << "cur_block: " << cur_block << ", time: " << (cur_time) << ", delta: " << (cur_time - prev_time) << "\n";
+        fout << cur_block << ' ' << cur_time << '\n';
+        jump_detector.add_measure(cur_time);
+        if (jump_detector.is_jump()) {
+            res_block = cur_block;
+            break;
+        }
+        prev_time = cur_time;
+    }
+    fout.close();
+    return res_block;
+}
+
+int main() {
+    print_cpu_version();
+    int res_assoc = assoc();
+    std::cout << "Assoc: " << res_assoc << "\n";
+    int res_size = size();
+    std::cout << "Size: " << res_size << "\n";
+    int res_block = block();
+    std::cout << "Block size: " << res_block << "\n";
 }
